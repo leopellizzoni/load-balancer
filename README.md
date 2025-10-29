@@ -9,3 +9,27 @@
 **location** captura todas as requisições que chegam ao servidor na porta 4000. O / é um path genérico que corresponde a qualquer URL.
 
 **proxy_pass** diretiva que vai receber as requisições e enviar para o grupo de servidores definidos no upstream que foi chamado de meus_sites
+
+
+**Principais Comandos**
+
+Inicia o servidor. Ao acessar localhost:8080 deverá ver uma mensagem Welcome to nginx
+```
+nginx
+```
+
+define um arquivo de configuração alternativo ao original (nginx.conf) da instalação 
+```
+nginx -c arquivo.conf 
+```
+
+para tudo
+```
+nginx -s stop
+```
+
+recarrega depois de alterar a configuração 
+```
+nginx -s reload
+```
+
