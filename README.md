@@ -1,4 +1,4 @@
-**Detalhamento do nginx.conf**
+# Detalhamento do nginx.conf
 
 **http** contexto principal para configurações relacionadas ao protocolo HTTP. Todas as configurações de servidores virtuais (server) e de balanceamento de carga (upstream) ficam aqui.
 
@@ -11,7 +11,7 @@
 **proxy_pass** diretiva que vai receber as requisições e enviar para o grupo de servidores definidos no upstream que foi chamado de meus_sites
 
 
-**Principais Comandos**
+# Principais Comandos
 
 Inicia o servidor. Ao acessar localhost:8080 deverá ver uma mensagem Welcome to nginx
 ```
@@ -32,4 +32,3 @@ recarrega depois de alterar a configuração
 ```
 nginx -s reload
 ```
-
