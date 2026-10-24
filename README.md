@@ -37,7 +37,6 @@ O algoritmo padrão de distribuição é o **Round-Robin**: a primeira requisiç
 | `nginx.conf` | Configuração do load balancer e dos dois servidores, explicada na próxima seção. É o arquivo que você vai editar. |
 | `site1/index.html` | Página azul que identifica o servidor 1. |
 | `site2/index.html` | Página amarela que identifica o servidor 2. |
-| `LICENSE` | Licença MIT. Use e modifique à vontade. |
 
 ## Entendendo o nginx.conf
 
