@@ -1,6 +1,12 @@
 *.exe
 *.o
-*.DS_Store
 *.out
 *.bin
 *.dSYM
+.DS_Store
+Thumbs.db
+
+# nginx
+logs/
+*.log
+*.pid
