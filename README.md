@@ -383,7 +383,3 @@ Aperte F5 em http://localhost:4000 várias vezes. Apareceu algum erro? O que o l
 Depois descomente o bloco e recarregue. Observe se o servidor 2 voltou ao rodízio.
 
 Variação: em vez de comentar o bloco, marque o servidor no `upstream` com `server 127.0.0.1:5002 down;`. É assim que se tira um servidor do ar de propósito, para manutenção, sem derrubar nada.
-
-## Licença
-
-MIT. Veja o arquivo [LICENSE](LICENSE).
