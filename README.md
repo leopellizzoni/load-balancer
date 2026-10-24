@@ -285,18 +285,100 @@ Variação: em vez de comentar o bloco, marque o servidor no `upstream` com `ser
 
 ## Entendendo o nginx.conf
 
-O arquivo tem dois blocos de primeiro nível. `events {}` controla como o nginx trata conexões e pode ficar vazio aqui. Tudo que interessa está dentro de `http {}`.
+O arquivo descreve três servidores dentro de um único processo do nginx. A melhor forma de entender é seguir o caminho que uma requisição percorre, de cima para baixo. Os trechos abaixo foram tirados do `nginx.conf`, sem os comentários.
 
-- **`http`**: contexto principal para tudo que é HTTP. Os servidores virtuais (`server`) e o grupo de balanceamento (`upstream`) ficam aqui dentro.
-- **`upstream meus_sites`**: o grupo de servidores entre os quais as requisições serão distribuídas. Cada linha `server` é um destino. Opções como `weight`, `down`, `least_conn` e `ip_hash` mudam a forma de distribuir.
-- **`server`**: um servidor virtual. Há três no arquivo: o load balancer (porta 4000) e os dois sites (portas 5001 e 5002).
-- **`listen`**: a porta em que aquele `server` recebe conexões.
-- **`server_name`**: o nome de host que aquele `server` atende. Aqui é sempre `localhost`.
-- **`location /`**: captura as requisições que chegam no `server`. O `/` casa com qualquer URL.
-- **`proxy_pass`**: repassa a requisição recebida para o grupo `meus_sites`. É a diretiva que transforma o `server` da porta 4000 em load balancer.
-- **`root`**: a pasta onde estão os arquivos que o `server` entrega. É a linha que você edita no passo 2.
-- **`index`**: o arquivo entregue quando a URL termina em `/`. Aqui é o `index.html`.
-- **`add_header`**: acrescenta um cabeçalho HTTP na resposta. Usado para o `X-Servidor` (identificar quem respondeu) e para o `Cache-Control` (impedir que o navegador guarde a página e esconda a alternância).
+### A estrutura geral
+
+```nginx
+events {
+}
+
+http {
+    upstream meus_sites { ... }     # a lista de servidores que recebem o tráfego
+
+    server { listen 4000; ... }     # o load balancer
+    server { listen 5001; ... }     # o site1
+    server { listen 5002; ... }     # o site2
+}
+```
+
+Tudo que importa está dentro de `http { }`, o contexto onde o nginx trata o protocolo HTTP. O bloco `events { }` controla como o nginx lida com conexões simultâneas e pode ficar vazio, porque os valores padrão servem.
+
+Cada bloco `server { }` é um **servidor virtual**: um conjunto de regras que vale para uma porta. Como os três escutam em portas diferentes, o nginx sabe qual bloco usar pela porta em que a requisição chegou.
+
+### O grupo de servidores: `upstream`
+
+```nginx
+upstream meus_sites {
+    server 127.0.0.1:5001;
+    server 127.0.0.1:5002;
+}
+```
+
+O `upstream` dá um nome, `meus_sites`, a uma lista de destinos. Cada linha `server` é um endereço IP e uma porta. Aqui os dois estão em `127.0.0.1`, a própria máquina. Em produção seriam IPs de máquinas diferentes.
+
+Sem nenhuma opção extra, o nginx distribui as requisições em **Round-Robin**. As opções abaixo mudam esse comportamento e são as que você usa nos exercícios:
+
+| Opção | Onde entra | Efeito |
+|---|---|---|
+| `weight=2` | no fim de uma linha `server` | aquele servidor recebe o dobro de requisições |
+| `down` | no fim de uma linha `server` | aquele servidor sai do rodízio |
+| `least_conn;` | linha própria dentro do bloco | manda para o servidor com menos conexões ativas |
+| `ip_hash;` | linha própria dentro do bloco | o mesmo cliente cai sempre no mesmo servidor |
+
+### O load balancer: `server` na porta 4000
+
+```nginx
+server {
+    listen 4000;
+
+    location / {
+        proxy_pass http://meus_sites;
+        add_header Cache-Control "no-store";
+    }
+}
+```
+
+- `listen 4000;` diz que este bloco atende o que chega na porta 4000. É a URL única que o usuário acessa.
+- `location / { }` agrupa regras para um caminho da URL. O `/` casa com qualquer caminho, então toda requisição cai aqui.
+- `proxy_pass http://meus_sites;` é a linha que faz o balanceamento. Em vez de apontar para um IP e porta fixos, aponta para o nome do `upstream`. A cada requisição o nginx escolhe um servidor do grupo e repassa a requisição para ele.
+- `add_header Cache-Control "no-store";` acrescenta um cabeçalho HTTP na resposta pedindo ao navegador para não guardar a página. Sem isso, um F5 poderia mostrar a página antiga sem passar pelo load balancer.
+
+Repare que este bloco não tem `root`: o load balancer não entrega arquivo nenhum. Ele só recebe e repassa.
+
+### Os sites: `server` nas portas 5001 e 5002
+
+```nginx
+server {
+    listen 5001;
+    server_name localhost;
+
+    root CAMINHO_DO_REPOSITORIO/site1;
+    index index.html;
+
+    add_header X-Servidor "servidor1";
+}
+```
+
+- `listen 5001;` atende a porta 5001. O bloco do site2 é idêntico, trocando 5001 por 5002, `site1` por `site2` e `servidor1` por `servidor2`.
+- `server_name localhost;` é o nome de host que este bloco responde. Faz diferença quando vários sites dividem a mesma porta. Aqui cada um tem a sua, então ele não interfere.
+- `root ...;` é a pasta de onde os arquivos saem. O nginx junta o caminho da URL com essa pasta para achar o arquivo no disco. É a linha que você edita no passo 2.
+- `index index.html;` diz qual arquivo entregar quando a URL termina em `/`. Esse já é o valor padrão do nginx, mas deixar explícito mostra o que está acontecendo.
+- `add_header X-Servidor "servidor1";` acrescenta um cabeçalho inventado para este kit. O nginx repassa os cabeçalhos do site para o usuário, então ele chega até o terminal no passo 7.
+
+Aqui não existe `proxy_pass`: este bloco entrega os arquivos ele mesmo. É o nginx no papel de servidor web comum.
+
+### O caminho de uma requisição
+
+Juntando tudo, isto acontece quando você aperta F5 em http://localhost:4000:
+
+1. A requisição chega na porta 4000 e cai no bloco `server` do load balancer.
+2. A URL `/` casa com o `location /`.
+3. O `proxy_pass` consulta o `upstream meus_sites` e escolhe o próximo servidor do rodízio, por exemplo `127.0.0.1:5001`.
+4. O nginx abre uma conexão para a porta 5001 e repete a requisição. Ela cai no bloco `server` do site1.
+5. Esse bloco junta `root` e `index` e lê o arquivo `site1/index.html` do disco.
+6. A resposta volta com o cabeçalho `X-Servidor: servidor1`. O load balancer acrescenta `Cache-Control: no-store` e devolve tudo para o navegador.
+7. No próximo F5, o passo 3 escolhe `127.0.0.1:5002` e a página amarela aparece.
 
 ## Licença
 
