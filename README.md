@@ -17,11 +17,12 @@ Tudo roda em um único processo do nginx: ele é o load balancer na porta 4000 e
 
 ## O que você vai fazer
 
-1. Instalar o nginx.
-2. Apontar o `nginx.conf` para as pastas `site1` e `site2`.
-3. Subir tudo com um comando.
-4. Ver, no navegador e no terminal, a alternância entre os servidores.
-5. Trocar o algoritmo de balanceamento e observar o efeito.
+1. Entender como o `nginx.conf` monta o load balancer e os dois sites.
+2. Instalar o nginx.
+3. Apontar o `nginx.conf` para as pastas `site1` e `site2`.
+4. Subir tudo com um comando.
+5. Ver, no navegador e no terminal, a alternância entre os servidores.
+6. Trocar o algoritmo de balanceamento e observar o efeito.
 
 ## Por que existe um load balancer
 
@@ -33,10 +34,107 @@ O algoritmo padrão de distribuição é o **Round-Robin**: a primeira requisiç
 
 | Arquivo | Para que serve |
 |---|---|
-| `nginx.conf` | Configuração do load balancer e dos dois servidores. É o arquivo que você vai editar. |
+| `nginx.conf` | Configuração do load balancer e dos dois servidores, explicada na próxima seção. É o arquivo que você vai editar. |
 | `site1/index.html` | Página azul que identifica o servidor 1. |
 | `site2/index.html` | Página amarela que identifica o servidor 2. |
 | `LICENSE` | Licença MIT. Use e modifique à vontade. |
+
+## Entendendo o nginx.conf
+
+O arquivo descreve três servidores dentro de um único processo do nginx. A melhor forma de entender é seguir o caminho que uma requisição percorre, de cima para baixo. Os trechos abaixo foram tirados do `nginx.conf`, sem os comentários. Leia esta seção antes de mexer no arquivo.
+
+### A estrutura geral
+
+```nginx
+events {
+}
+
+http {
+    upstream meus_sites { ... }     # a lista de servidores que recebem o tráfego
+
+    server { listen 4000; ... }     # o load balancer
+    server { listen 5001; ... }     # o site1
+    server { listen 5002; ... }     # o site2
+}
+```
+
+Tudo que importa está dentro de `http { }`, o contexto onde o nginx trata o protocolo HTTP. O bloco `events { }` controla como o nginx lida com conexões simultâneas e pode ficar vazio, porque os valores padrão servem.
+
+Cada bloco `server { }` é um **servidor virtual**: um conjunto de regras que vale para uma porta. Como os três escutam em portas diferentes, o nginx sabe qual bloco usar pela porta em que a requisição chegou.
+
+### O grupo de servidores: `upstream`
+
+```nginx
+upstream meus_sites {
+    server 127.0.0.1:5001;
+    server 127.0.0.1:5002;
+}
+```
+
+O `upstream` dá um nome, `meus_sites`, a uma lista de destinos. Cada linha `server` é um endereço IP e uma porta. Aqui os dois estão em `127.0.0.1`, a própria máquina. Em produção seriam IPs de máquinas diferentes.
+
+Sem nenhuma opção extra, o nginx distribui as requisições em **Round-Robin**. As opções abaixo mudam esse comportamento e são as que você usa nos exercícios:
+
+| Opção | Onde entra | Efeito |
+|---|---|---|
+| `weight=2` | no fim de uma linha `server` | aquele servidor recebe o dobro de requisições |
+| `down` | no fim de uma linha `server` | aquele servidor sai do rodízio |
+| `least_conn;` | linha própria dentro do bloco | manda para o servidor com menos conexões ativas |
+| `ip_hash;` | linha própria dentro do bloco | o mesmo cliente cai sempre no mesmo servidor |
+
+### O load balancer: `server` na porta 4000
+
+```nginx
+server {
+    listen 4000;
+
+    location / {
+        proxy_pass http://meus_sites;
+        add_header Cache-Control "no-store";
+    }
+}
+```
+
+- `listen 4000;` diz que este bloco atende o que chega na porta 4000. É a URL única que o usuário acessa.
+- `location / { }` agrupa regras para um caminho da URL. O `/` casa com qualquer caminho, então toda requisição cai aqui.
+- `proxy_pass http://meus_sites;` é a linha que faz o balanceamento. Em vez de apontar para um IP e porta fixos, aponta para o nome do `upstream`. A cada requisição o nginx escolhe um servidor do grupo e repassa a requisição para ele.
+- `add_header Cache-Control "no-store";` acrescenta um cabeçalho HTTP na resposta pedindo ao navegador para não guardar a página. Sem isso, um F5 poderia mostrar a página antiga sem passar pelo load balancer.
+
+Repare que este bloco não tem `root`: o load balancer não entrega arquivo nenhum. Ele só recebe e repassa.
+
+### Os sites: `server` nas portas 5001 e 5002
+
+```nginx
+server {
+    listen 5001;
+    server_name localhost;
+
+    root CAMINHO_DO_REPOSITORIO/site1;
+    index index.html;
+
+    add_header X-Servidor "servidor1";
+}
+```
+
+- `listen 5001;` atende a porta 5001. O bloco do site2 é idêntico, trocando 5001 por 5002, `site1` por `site2` e `servidor1` por `servidor2`.
+- `server_name localhost;` é o nome de host que este bloco responde. Faz diferença quando vários sites dividem a mesma porta. Aqui cada um tem a sua, então ele não interfere.
+- `root ...;` é a pasta de onde os arquivos saem. O nginx junta o caminho da URL com essa pasta para achar o arquivo no disco. É a linha que você edita no passo 2.
+- `index index.html;` diz qual arquivo entregar quando a URL termina em `/`. Esse já é o valor padrão do nginx, mas deixar explícito mostra o que está acontecendo.
+- `add_header X-Servidor "servidor1";` acrescenta um cabeçalho inventado para este kit. O nginx repassa os cabeçalhos do site para o usuário, então ele chega até o terminal no passo 7.
+
+Aqui não existe `proxy_pass`: este bloco entrega os arquivos ele mesmo. É o nginx no papel de servidor web comum.
+
+### O caminho de uma requisição
+
+Juntando tudo, isto acontece quando você aperta F5 em http://localhost:4000:
+
+1. A requisição chega na porta 4000 e cai no bloco `server` do load balancer.
+2. A URL `/` casa com o `location /`.
+3. O `proxy_pass` consulta o `upstream meus_sites` e escolhe o próximo servidor do rodízio, por exemplo `127.0.0.1:5001`.
+4. O nginx abre uma conexão para a porta 5001 e repete a requisição. Ela cai no bloco `server` do site1.
+5. Esse bloco junta `root` e `index` e lê o arquivo `site1/index.html` do disco.
+6. A resposta volta com o cabeçalho `X-Servidor: servidor1`. O load balancer acrescenta `Cache-Control: no-store` e devolve tudo para o navegador.
+7. No próximo F5, o passo 3 escolhe `127.0.0.1:5002` e a página amarela aparece.
 
 ## Pré-requisitos
 
@@ -79,6 +177,18 @@ nginx -v
 
 Deve mostrar algo como `nginx version: nginx/1.29.2`.
 
+## Referência rápida de comandos
+
+Estes são todos os comandos do nginx que você vai usar no passo a passo. Troque `/caminho` pelo caminho completo do repositório.
+
+| O que faz | macOS | Linux | Windows (cmd, em `C:\nginx`) |
+|---|---|---|---|
+| Testar a configuração | `nginx -t -c /caminho/nginx.conf` | `sudo nginx -t -c /caminho/nginx.conf` | `nginx -t -c C:/caminho/nginx.conf` |
+| Subir | `nginx -c /caminho/nginx.conf` | `sudo nginx -c /caminho/nginx.conf` | `start nginx -c C:/caminho/nginx.conf` |
+| Aplicar mudança na configuração | `nginx -s reload` | `sudo nginx -s reload` | `nginx -s reload` |
+| Parar | `nginx -s stop` | `sudo nginx -s stop` | `nginx -s stop` |
+| Ver a versão | `nginx -v` | `nginx -v` | `nginx -v` |
+
 ## Passo a passo
 
 ### 1. Clone o repositório
@@ -95,7 +205,7 @@ Anote o caminho completo da pasta. Você vai precisar dele nos próximos passos.
 
 ### 2. Aponte o nginx.conf para as suas pastas
 
-Abra o `nginx.conf` em um editor de texto. Troque `CAMINHO_DO_REPOSITORIO` (aparece duas vezes, nas linhas `root`) pelo caminho que você anotou. Use barras normais `/` mesmo no Windows.
+Abra o `nginx.conf` em um editor de texto. Troque `CAMINHO_DO_REPOSITORIO` (aparece duas vezes, nas linhas `root` que você viu na seção Entendendo o nginx.conf) pelo caminho que você anotou. Use barras normais `/` mesmo no Windows.
 
 Antes:
 
@@ -206,9 +316,25 @@ Windows (cmd, dentro de `C:\nginx`): `nginx -s stop`
 
 Sempre que alterar o `nginx.conf` com o nginx no ar, aplique a mudança com `nginx -s reload` (com `sudo` no Linux). Não precisa parar e subir de novo.
 
+## Problemas comuns
+
+Se algum passo não deu o resultado esperado, procure o sintoma aqui antes de seguir para os exercícios.
+
+| Sintoma | Causa provável | O que fazer |
+|---|---|---|
+| `nginx: [emerg] open() "...nginx.conf" failed` | Caminho do `-c` errado | Confira o caminho completo do arquivo. Precisa ser absoluto. |
+| `404 Not Found` em :5001 ou :5002 | `CAMINHO_DO_REPOSITORIO` não foi trocado ou está errado | Refaça o passo 2 e rode `nginx -s reload`. |
+| `403 Forbidden` no Linux | O nginx não tem permissão para entrar na sua pasta home | Rode `chmod o+x ~` ou clone o repositório em `/opt` ou `/srv`. |
+| `bind() to 0.0.0.0:4000 failed (Address already in use)` | O nginx do kit já está rodando, ou outro programa usa a porta | Se o nginx já estiver no ar, use `nginx -s reload`. Senão, troque a porta no `nginx.conf`. |
+| Alterei o `nginx.conf` e nada mudou | Faltou aplicar a mudança | Rode `nginx -s reload`. |
+| A página não alterna no navegador | Cache do navegador ou extensão interferindo | Teste pelo terminal (passo 7). Se alterna lá, abra uma aba anônima. |
+| `nginx -s stop` reclama que não achou o pid | O nginx não está rodando | Nada a fazer. |
+| Windows: `curl` não é reconhecido ou dá erro estranho | Você está no PowerShell, onde `curl` é outro comando | Use o cmd, ou troque `curl` por `curl.exe`. |
+| Windows: `nginx -s stop` não funciona | Comando executado fora de `C:\nginx` | Entre na pasta com `cd C:\nginx` e repita. |
+
 ## Exercícios
 
-Todos seguem o mesmo ciclo: edite o `nginx.conf`, rode `nginx -s reload`, repita o passo 7 e anote o que mudou. As linhas necessárias já estão comentadas dentro do bloco `upstream` do `nginx.conf`.
+Todos seguem o mesmo ciclo: edite o `nginx.conf`, rode `nginx -s reload`, repita o passo 7 e anote o que mudou. As linhas necessárias já estão comentadas dentro do bloco `upstream` do `nginx.conf`, e a tabela de opções da seção Entendendo o nginx.conf explica cada uma.
 
 ### 1. Pesos (Weighted Round-Robin)
 
@@ -258,127 +384,6 @@ Aperte F5 em http://localhost:4000 várias vezes. Apareceu algum erro? O que o l
 Depois descomente o bloco e recarregue. Observe se o servidor 2 voltou ao rodízio.
 
 Variação: em vez de comentar o bloco, marque o servidor no `upstream` com `server 127.0.0.1:5002 down;`. É assim que se tira um servidor do ar de propósito, para manutenção, sem derrubar nada.
-
-## Problemas comuns
-
-| Sintoma | Causa provável | O que fazer |
-|---|---|---|
-| `nginx: [emerg] open() "...nginx.conf" failed` | Caminho do `-c` errado | Confira o caminho completo do arquivo. Precisa ser absoluto. |
-| `404 Not Found` em :5001 ou :5002 | `CAMINHO_DO_REPOSITORIO` não foi trocado ou está errado | Refaça o passo 2 e rode `nginx -s reload`. |
-| `403 Forbidden` no Linux | O nginx não tem permissão para entrar na sua pasta home | Rode `chmod o+x ~` ou clone o repositório em `/opt` ou `/srv`. |
-| `bind() to 0.0.0.0:4000 failed (Address already in use)` | O nginx do kit já está rodando, ou outro programa usa a porta | Se o nginx já estiver no ar, use `nginx -s reload`. Senão, troque a porta no `nginx.conf`. |
-| Alterei o `nginx.conf` e nada mudou | Faltou aplicar a mudança | Rode `nginx -s reload`. |
-| A página não alterna no navegador | Cache do navegador ou extensão interferindo | Teste pelo terminal (passo 7). Se alterna lá, abra uma aba anônima. |
-| `nginx -s stop` reclama que não achou o pid | O nginx não está rodando | Nada a fazer. |
-| Windows: `curl` não é reconhecido ou dá erro estranho | Você está no PowerShell, onde `curl` é outro comando | Use o cmd, ou troque `curl` por `curl.exe`. |
-| Windows: `nginx -s stop` não funciona | Comando executado fora de `C:\nginx` | Entre na pasta com `cd C:\nginx` e repita. |
-
-## Referência rápida de comandos
-
-| O que faz | macOS | Linux | Windows (cmd, em `C:\nginx`) |
-|---|---|---|---|
-| Testar a configuração | `nginx -t -c /caminho/nginx.conf` | `sudo nginx -t -c /caminho/nginx.conf` | `nginx -t -c C:/caminho/nginx.conf` |
-| Subir | `nginx -c /caminho/nginx.conf` | `sudo nginx -c /caminho/nginx.conf` | `start nginx -c C:/caminho/nginx.conf` |
-| Aplicar mudança na configuração | `nginx -s reload` | `sudo nginx -s reload` | `nginx -s reload` |
-| Parar | `nginx -s stop` | `sudo nginx -s stop` | `nginx -s stop` |
-| Ver a versão | `nginx -v` | `nginx -v` | `nginx -v` |
-
-## Entendendo o nginx.conf
-
-O arquivo descreve três servidores dentro de um único processo do nginx. A melhor forma de entender é seguir o caminho que uma requisição percorre, de cima para baixo. Os trechos abaixo foram tirados do `nginx.conf`, sem os comentários.
-
-### A estrutura geral
-
-```nginx
-events {
-}
-
-http {
-    upstream meus_sites { ... }     # a lista de servidores que recebem o tráfego
-
-    server { listen 4000; ... }     # o load balancer
-    server { listen 5001; ... }     # o site1
-    server { listen 5002; ... }     # o site2
-}
-```
-
-Tudo que importa está dentro de `http { }`, o contexto onde o nginx trata o protocolo HTTP. O bloco `events { }` controla como o nginx lida com conexões simultâneas e pode ficar vazio, porque os valores padrão servem.
-
-Cada bloco `server { }` é um **servidor virtual**: um conjunto de regras que vale para uma porta. Como os três escutam em portas diferentes, o nginx sabe qual bloco usar pela porta em que a requisição chegou.
-
-### O grupo de servidores: `upstream`
-
-```nginx
-upstream meus_sites {
-    server 127.0.0.1:5001;
-    server 127.0.0.1:5002;
-}
-```
-
-O `upstream` dá um nome, `meus_sites`, a uma lista de destinos. Cada linha `server` é um endereço IP e uma porta. Aqui os dois estão em `127.0.0.1`, a própria máquina. Em produção seriam IPs de máquinas diferentes.
-
-Sem nenhuma opção extra, o nginx distribui as requisições em **Round-Robin**. As opções abaixo mudam esse comportamento e são as que você usa nos exercícios:
-
-| Opção | Onde entra | Efeito |
-|---|---|---|
-| `weight=2` | no fim de uma linha `server` | aquele servidor recebe o dobro de requisições |
-| `down` | no fim de uma linha `server` | aquele servidor sai do rodízio |
-| `least_conn;` | linha própria dentro do bloco | manda para o servidor com menos conexões ativas |
-| `ip_hash;` | linha própria dentro do bloco | o mesmo cliente cai sempre no mesmo servidor |
-
-### O load balancer: `server` na porta 4000
-
-```nginx
-server {
-    listen 4000;
-
-    location / {
-        proxy_pass http://meus_sites;
-        add_header Cache-Control "no-store";
-    }
-}
-```
-
-- `listen 4000;` diz que este bloco atende o que chega na porta 4000. É a URL única que o usuário acessa.
-- `location / { }` agrupa regras para um caminho da URL. O `/` casa com qualquer caminho, então toda requisição cai aqui.
-- `proxy_pass http://meus_sites;` é a linha que faz o balanceamento. Em vez de apontar para um IP e porta fixos, aponta para o nome do `upstream`. A cada requisição o nginx escolhe um servidor do grupo e repassa a requisição para ele.
-- `add_header Cache-Control "no-store";` acrescenta um cabeçalho HTTP na resposta pedindo ao navegador para não guardar a página. Sem isso, um F5 poderia mostrar a página antiga sem passar pelo load balancer.
-
-Repare que este bloco não tem `root`: o load balancer não entrega arquivo nenhum. Ele só recebe e repassa.
-
-### Os sites: `server` nas portas 5001 e 5002
-
-```nginx
-server {
-    listen 5001;
-    server_name localhost;
-
-    root CAMINHO_DO_REPOSITORIO/site1;
-    index index.html;
-
-    add_header X-Servidor "servidor1";
-}
-```
-
-- `listen 5001;` atende a porta 5001. O bloco do site2 é idêntico, trocando 5001 por 5002, `site1` por `site2` e `servidor1` por `servidor2`.
-- `server_name localhost;` é o nome de host que este bloco responde. Faz diferença quando vários sites dividem a mesma porta. Aqui cada um tem a sua, então ele não interfere.
-- `root ...;` é a pasta de onde os arquivos saem. O nginx junta o caminho da URL com essa pasta para achar o arquivo no disco. É a linha que você edita no passo 2.
-- `index index.html;` diz qual arquivo entregar quando a URL termina em `/`. Esse já é o valor padrão do nginx, mas deixar explícito mostra o que está acontecendo.
-- `add_header X-Servidor "servidor1";` acrescenta um cabeçalho inventado para este kit. O nginx repassa os cabeçalhos do site para o usuário, então ele chega até o terminal no passo 7.
-
-Aqui não existe `proxy_pass`: este bloco entrega os arquivos ele mesmo. É o nginx no papel de servidor web comum.
-
-### O caminho de uma requisição
-
-Juntando tudo, isto acontece quando você aperta F5 em http://localhost:4000:
-
-1. A requisição chega na porta 4000 e cai no bloco `server` do load balancer.
-2. A URL `/` casa com o `location /`.
-3. O `proxy_pass` consulta o `upstream meus_sites` e escolhe o próximo servidor do rodízio, por exemplo `127.0.0.1:5001`.
-4. O nginx abre uma conexão para a porta 5001 e repete a requisição. Ela cai no bloco `server` do site1.
-5. Esse bloco junta `root` e `index` e lê o arquivo `site1/index.html` do disco.
-6. A resposta volta com o cabeçalho `X-Servidor: servidor1`. O load balancer acrescenta `Cache-Control: no-store` e devolve tudo para o navegador.
-7. No próximo F5, o passo 3 escolhe `127.0.0.1:5002` e a página amarela aparece.
 
 ## Licença
 
